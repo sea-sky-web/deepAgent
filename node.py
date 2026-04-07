@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from llm import LLMClient
-from schema import ActionDecision, StructuredFinalAnswer, Plan, ToolRequest, ToolResult, TodoItem
+from schema import ActionDecision, StructuredFinalAnswer, Plan, ToolRequest, ToolResult, TodoItem, IntentDecision
 from state import AgentState
 from tools.registry import ToolRegistry
 from memory_runtime import MemoryStore, EpisodeMemory
@@ -375,3 +375,51 @@ def memory_update_node(state: AgentState, memory_store: MemoryStore) -> AgentSta
     state.memory_profile = profile
     state.step_history.append("memory_update: persisted profile and episode memory")
     return state
+
+
+def intent_router_node(state: AgentState, llm: LLMClient) -> IntentDecision:
+    system_prompt = """
+你是一个会话意图路由器。
+你需要判断当前用户输入属于哪一种：
+
+1. new_task
+- 用户开启了一个新主题、新任务
+- 不应复用当前 todo 规划
+
+2. continue_task
+- 用户希望继续当前未完成任务
+- 可以直接复用当前 todo / workspace / notes
+
+3. follow_up
+- 用户基于刚才结果追问、展开、解释
+- 应复用当前上下文，但不一定重新规划 todo
+
+判断时请结合：
+- 当前用户输入
+- 当前 todo 列表
+- 最近几轮 messages
+""".strip()
+
+    recent_messages = state.messages[-6:] if len(state.messages) > 6 else state.messages
+
+    user_prompt = f"""
+当前用户输入：
+{state.user_input}
+
+当前 todo 列表：
+{json.dumps([todo.model_dump() for todo in state.todo_list], ensure_ascii=False, indent=2)}
+
+最近消息：
+{json.dumps(recent_messages, ensure_ascii=False, indent=2)}
+
+请输出意图判断。
+""".strip()
+
+    decision = llm.chat_structured(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        output_model=IntentDecision,
+    )
+
+    state.step_history.append(f"intent_router: intent={decision.intent}")
+    return decision

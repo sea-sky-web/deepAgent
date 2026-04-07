@@ -2,10 +2,18 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from schema import ActionDecision, Plan, TodoItem, ToolRequest, ToolResult, StructuredFinalAnswer
+from schema import (
+    ActionDecision,
+    Plan,
+    TodoItem,
+    ToolRequest,
+    ToolResult,
+    StructuredFinalAnswer,
+)
 
 
 class AgentState(BaseModel):
+    thread_id: str = Field(...)
     user_input: str = Field(...)
     messages: list[dict] = Field(default_factory=list)
 
@@ -20,10 +28,10 @@ class AgentState(BaseModel):
     tool_result: ToolResult | None = Field(default=None)
 
     research_notes: list[str] = Field(default_factory=list)
-    workspace_root: str = Field(default="workspace")
+    workspace_root: str = Field(default="")
     workspace_files: list[str] = Field(default_factory=list)
     
-    # 用于生成唯一的工具执行结果文件名
+    # 工具执行结果文件管理：用于生成唯一的工具执行结果文件名
     tool_result_file_map: dict[str, str] = Field(default_factory=dict)  # tool_result_id -> file_path
     tool_result_counter: int = Field(default=0)  # 递增计数器用于生成唯一ID
 
@@ -43,3 +51,23 @@ class AgentState(BaseModel):
 
     max_steps: int = Field(default=10)
     current_step_count: int = Field(default=0)
+
+    def reset_turn_fields(self) -> None:
+        self.current_action = None
+        self.tool_request = None
+        self.tool_result = None
+        self.status = "initialized"
+        self.error = None
+        self.current_step_count = 0
+        self.final_answer = None
+        self.structured_response = None
+        self.step_history = []
+        self.tool_result_counter = 0
+        self.tool_result_file_map = {}
+
+    def append_user_message(self, content: str) -> None:
+        self.user_input = content
+        self.messages.append({"role": "user", "content": content})
+
+    def append_assistant_message(self, content: str) -> None:
+        self.messages.append({"role": "assistant", "content": content})

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -48,3 +48,11 @@ class StructuredFinalAnswer(BaseModel):
     sources: list[str] = Field(default_factory=list, description="引用到的文件或信息来源")
     next_actions: list[str] = Field(default_factory=list, description="下一步建议")
     memory_write: MemoryWrite = Field(..., description="本次运行要写入 memory 的内容")
+
+
+class IntentDecision(BaseModel):
+    intent: Literal["new_task", "continue_task", "follow_up"] = Field(
+        ...,
+        description="当前用户输入的意图类型"
+    )
+    reason: str = Field(..., description="为什么这样判断")
