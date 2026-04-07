@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 
 from llm import LLMClient
-from schema import ActionDecision, FinalAnswer, Plan, ToolRequest, ToolResult, TodoItem
+from schema import ActionDecision, StructuredFinalAnswer, Plan, ToolRequest, ToolResult, TodoItem
 from state import AgentState
 from tools.registry import ToolRegistry
+from memory_runtime import MemoryStore, EpisodeMemory
 
 
 def _find_next_pending_todo(state: AgentState) -> TodoItem | None:
@@ -34,6 +35,17 @@ def _set_todo_status(state: AgentState, todo_id: str, new_status: str) -> None:
 
 def _all_todos_completed(state: AgentState) -> bool:
     return len(state.todo_list) > 0 and all(todo.status == "completed" for todo in state.todo_list)
+
+
+def _get_completed_todo_files(state: AgentState) -> dict[str, list[str]]:
+    """获取每个已完成的todo对应的workspace notes文件列表"""
+    result = {}
+    for todo in state.todo_list:
+        if todo.status == "completed":
+            todo_files = [f for f in state.workspace_files if f.startswith(f"notes/{todo.id}_")]
+            if todo_files:
+                result[todo.id] = todo_files
+    return result
 
 
 def _compact_text(text: str, limit: int = 800) -> str:
@@ -116,7 +128,14 @@ def executor_node(state: AgentState, llm: LLMClient, tool_registry: ToolRegistry
             state.research_notes.append(f"[{current_todo.id}] {current_todo.content}\n{compact}")
 
             suffix = "task" if tr.tool_name == "task" else "search"
-            note_path = f"notes/{current_todo.id}_{suffix}.md"
+            
+            # 生成唯一的文件名：使用计数器确保不重复
+            state.tool_result_counter += 1
+            result_id = f"{current_todo.id}_{state.tool_result_counter}"
+            note_path = f"notes/{current_todo.id}_{suffix}_{state.tool_result_counter}.md"
+            
+            # 记录映射关系，便于后续读取
+            state.tool_result_file_map[result_id] = note_path
 
             state.current_action = ActionDecision(
                 action="call_tool",
@@ -173,6 +192,7 @@ def executor_node(state: AgentState, llm: LLMClient, tool_registry: ToolRegistry
         state.step_history.append(f"executor: move to next todo={current_todo.id}")
 
     tools_desc = json.dumps(tool_registry.list_tools(), ensure_ascii=False, indent=2)
+    completed_todo_files = _get_completed_todo_files(state)
 
     system_prompt = """
 你是一个严格的执行决策器。
@@ -185,6 +205,7 @@ def executor_node(state: AgentState, llm: LLMClient, tool_registry: ToolRegistry
 4. action 只能是 "call_tool" / "finalize" / "fail"
 5. 如果 action=call_tool，tool_name 必须从提供的工具列表中选择
 6. tool_input 必须符合 input_schema
+7. 当生成 task 工具的输入时，如果需要读取之前的调研结果，使用下方列出的 workspace notes 文件路径
 """.strip()
 
     user_prompt = f"""
@@ -196,6 +217,9 @@ def executor_node(state: AgentState, llm: LLMClient, tool_registry: ToolRegistry
 
 todo 列表：
 {json.dumps([todo.model_dump() for todo in state.todo_list], ensure_ascii=False, indent=2)}
+
+已完成的 todo 及其生成的 notes 文件：
+{json.dumps(completed_todo_files, ensure_ascii=False, indent=2)}
 
 workspace 文件：
 {json.dumps(state.workspace_files, ensure_ascii=False, indent=2)}
@@ -285,8 +309,8 @@ def tool_node(state: AgentState, tool_registry: ToolRegistry) -> AgentState:
 def finalizer_node(state: AgentState, llm: LLMClient) -> AgentState:
     system_prompt = """
 你是最终回答生成器。
-请基于用户输入、todo 执行结果和 research_notes，生成一个清晰、准确的最终回答。
-如果 research_notes 有多条，需要先归纳再回答。
+请基于用户输入、todo 执行结果、research_notes、workspace 文件和已加载 skills，
+输出结构化 JSON。
 """.strip()
 
     user_prompt = f"""
@@ -308,16 +332,46 @@ workspace 文件：
 skill 内容：
 {json.dumps(state.loaded_skills, ensure_ascii=False, indent=2)}
 
-请输出最终回答。
+已有 profile memory：
+{json.dumps(state.memory_profile, ensure_ascii=False, indent=2)}
+
+近期 episodes：
+{json.dumps(state.recent_episodes, ensure_ascii=False, indent=2)}
+
+请输出最终结构化结果。
 """.strip()
 
     result = llm.chat_structured(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
-        output_model=FinalAnswer,
+        output_model=StructuredFinalAnswer,
     )
 
+    state.structured_response = result
     state.final_answer = result.answer
     state.status = "done"
-    state.step_history.append("finalizer: generated final answer")
+    state.step_history.append("finalizer: generated structured final answer")
+    return state
+
+
+def memory_update_node(state: AgentState, memory_store: MemoryStore) -> AgentState:
+    if state.structured_response is None:
+        raise ValueError("memory_update_node called but structured_response is None")
+
+    memory_write = state.structured_response.memory_write
+
+    profile = memory_store.load_profile()
+    profile.update(memory_write.profile_updates)
+    memory_store.save_profile(profile)
+
+    episode = EpisodeMemory(
+        run_id=state.run_id,
+        user_input=state.user_input,
+        summary=memory_write.episode_summary,
+        tags=memory_write.tags,
+    )
+    memory_store.append_episode(episode)
+
+    state.memory_profile = profile
+    state.step_history.append("memory_update: persisted profile and episode memory")
     return state

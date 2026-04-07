@@ -6,39 +6,45 @@ from pydantic import BaseModel, Field
 
 
 class TodoItem(BaseModel):
-    id: str = Field(..., description="todo 唯一标识")
-    content: str = Field(..., description="todo 内容")
-    status: str = Field(..., description='todo 状态，只能是 "pending" / "in_progress" / "completed"')
+    id: str = Field(...)
+    content: str = Field(...)
+    status: str = Field(...)
 
 
 class Plan(BaseModel):
-    goal: str = Field(..., description="当前任务的总体目标")
-    todos: list[TodoItem] = Field(..., description="任务拆解后的 todo 列表")
+    goal: str = Field(...)
+    todos: list[TodoItem] = Field(...)
 
 
 class ActionDecision(BaseModel):
-    action: str = Field(..., description='当前动作，只能是 "call_tool" / "finalize" / "fail"')
-    reason: str = Field(..., description="为什么做这个动作")
-    tool_name: str | None = Field(default=None, description="当 action=call_tool 时，需要调用的工具名")
-    tool_input: dict[str, Any] | None = Field(
-        default=None,
-        description="当 action=call_tool 时，传给工具的结构化输入",
-    )
+    action: str = Field(...)
+    reason: str = Field(...)
+    tool_name: str | None = Field(default=None)
+    tool_input: dict[str, Any] | None = Field(default=None)
 
 
 class ToolRequest(BaseModel):
-    tool_name: str = Field(..., description="工具名称")
-    tool_input: dict[str, Any] = Field(..., description="工具结构化输入")
-    todo_id: str | None = Field(default=None, description="当前工具调用所属的 todo id")
+    tool_name: str = Field(...)
+    tool_input: dict[str, Any] = Field(...)
+    todo_id: str | None = Field(default=None)
 
 
 class ToolResult(BaseModel):
-    tool_name: str = Field(..., description="工具名称")
-    tool_input: dict[str, Any] = Field(..., description="工具结构化输入")
-    tool_output: str = Field(..., description="工具输出")
-    success: bool = Field(..., description="工具是否执行成功")
-    todo_id: str | None = Field(default=None, description="该结果属于哪个 todo")
+    tool_name: str = Field(...)
+    tool_input: dict[str, Any] = Field(...)
+    tool_output: str = Field(...)
+    success: bool = Field(...)
+    todo_id: str | None = Field(default=None)
 
 
-class FinalAnswer(BaseModel):
-    answer: str = Field(..., description="最终输出给用户的答案")
+class MemoryWrite(BaseModel):
+    profile_updates: dict[str, Any] = Field(default_factory=dict)
+    episode_summary: str = Field(...)
+    tags: list[str] = Field(default_factory=list)
+
+
+class StructuredFinalAnswer(BaseModel):
+    answer: str = Field(..., description="最终回答")
+    sources: list[str] = Field(default_factory=list, description="引用到的文件或信息来源")
+    next_actions: list[str] = Field(default_factory=list, description="下一步建议")
+    memory_write: MemoryWrite = Field(..., description="本次运行要写入 memory 的内容")

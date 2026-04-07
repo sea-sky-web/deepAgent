@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import uuid
 from pprint import pprint
 
 from config import Settings
 from llm import LLMClient
-from node import executor_node, finalizer_node, planner_node, tool_node
+from memory_runtime import MemoryStore
+from tracing_runtime import RunTracer
+from node import executor_node, finalizer_node, planner_node, tool_node, memory_update_node
 from state import AgentState
-from subagents import SubAgentManager, SubAgentSpec
 from skill_runtime import SkillRegistry
+from subagents import SubAgentManager, SubAgentSpec
 from tools import (
     ToolRegistry,
     TavilySearchTool,
@@ -30,6 +33,9 @@ def main() -> None:
     settings = Settings.from_env()
     llm = LLMClient(settings)
 
+    memory_store = MemoryStore(root="memory")
+    tracer = RunTracer(root="runs")
+
     backend = LocalWorkspaceBackend(root="workspace")
 
     tool_registry = ToolRegistry()
@@ -38,11 +44,6 @@ def main() -> None:
     tool_registry.register(ReadFileTool(backend))
     tool_registry.register(WriteFileTool(backend))
     tool_registry.register(AppendFileTool(backend))
-
-    skill_registry = SkillRegistry(skills_root="skills")
-    skill_registry.scan()
-
-    tool_registry.register(LoadSkillTool(skill_registry))
 
     subagent_manager = SubAgentManager(llm=llm, tool_registry=tool_registry)
     subagent_manager.register(
@@ -66,14 +67,23 @@ def main() -> None:
 
     tool_registry.register(TaskTool(subagent_manager))
 
+    skill_registry = SkillRegistry(skills_root="skills")
+    skill_registry.scan()
+    tool_registry.register(LoadSkillTool(skill_registry))
+
+    run_id = uuid.uuid4().hex[:12]
+
     state = AgentState(
-        user_input="帮我调研 RAG 的基本流程，并给出一个清晰总结",
+        run_id=run_id,
+        user_input="帮我调研 RAG 的 chunking 和 rerank，并给出总结,注意要有实践的技术路线",
         messages=[
-            {"role": "user", "content": "帮我调研 RAG 的基本流程，并给出一个清晰总结"}
+            {"role": "user", "content": "帮我调研 RAG 的 chunking 和 rerank，并给出总结"}
         ],
         max_steps=10,
         workspace_root="workspace",
         available_skills=skill_registry.list_metadata(),
+        memory_profile=memory_store.load_profile(),
+        recent_episodes=memory_store.load_recent_episodes(limit=5),
     )
 
     print_stage("INITIAL STATE", state)
@@ -112,6 +122,9 @@ def main() -> None:
             if action == "finalize":
                 state = finalizer_node(state, llm)
                 print_stage("AFTER FINALIZER", state)
+
+                state = memory_update_node(state, memory_store)
+                print_stage("AFTER MEMORY UPDATE", state)
                 break
 
             if action == "fail":
@@ -132,8 +145,11 @@ def main() -> None:
         state.error = str(exc)
         print_stage("FAILED", state)
 
+    trace_path = tracer.save_run(run_id=state.run_id, payload=state.model_dump())
+
     print("\n===== FINAL ANSWER =====")
     print(state.final_answer)
+    print(f"\nTrace saved to: {trace_path}")
 
 
 if __name__ == "__main__":
