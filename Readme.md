@@ -1,0 +1,2 @@
+## 运行时框架
+使用AgentState维护统一状态；palnner用于分解并生成子任务而后调用subagent进行执行，同时使用tools进行工具调用；这里的workspace用于处理上下文；

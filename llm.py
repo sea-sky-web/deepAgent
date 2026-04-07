@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Type
+from typing import Type
+
 from openai import OpenAI
 from pydantic import BaseModel
+
 from config import Settings
 
 
@@ -32,7 +34,11 @@ class LLMClient:
         user_prompt: str,
         output_model: Type[BaseModel],
     ) -> BaseModel:
-        schema_json = json.dumps(output_model.model_json_schema(), ensure_ascii=False, indent=2)
+        schema_json = json.dumps(
+            output_model.model_json_schema(),
+            ensure_ascii=False,
+            indent=2,
+        )
 
         prompt = f"""
 你必须输出严格 JSON，且必须符合下面的 JSON Schema。

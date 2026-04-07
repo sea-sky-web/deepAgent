@@ -1,18 +1,44 @@
 from __future__ import annotations
+
+from typing import Any
+
 from pydantic import BaseModel, Field
-"""
-约束Agent输出格式;
-"""
+
+
+class TodoItem(BaseModel):
+    id: str = Field(..., description="todo 唯一标识")
+    content: str = Field(..., description="todo 内容")
+    status: str = Field(..., description='todo 状态，只能是 "pending" / "in_progress" / "completed"')
+
+
 class Plan(BaseModel):
-    """规划Agent:负责制定整体的计划和策略，确定需要完成的任务和目标。"""
-    goal: str = Field(..., description="整体目标")
-    steps: list[str] = Field(..., description="实现目标的步骤列表")
+    goal: str = Field(..., description="当前任务的总体目标")
+    todos: list[TodoItem] = Field(..., description="任务拆解后的 todo 列表")
+
 
 class ActionDecision(BaseModel):
-    """决策Agent:负责根据当前的情况和计划做出具体的行动决策，选择最合适的行动方案。"""
-    action: str = Field(..., description="当前执行动作")
-    reason: str = Field(..., description="执行动作的原因")
+    action: str = Field(..., description='当前动作，只能是 "call_tool" / "finalize" / "fail"')
+    reason: str = Field(..., description="为什么做这个动作")
+    tool_name: str | None = Field(default=None, description="当 action=call_tool 时，需要调用的工具名")
+    tool_input: dict[str, Any] | None = Field(
+        default=None,
+        description="当 action=call_tool 时，传给工具的结构化输入",
+    )
+
+
+class ToolRequest(BaseModel):
+    tool_name: str = Field(..., description="工具名称")
+    tool_input: dict[str, Any] = Field(..., description="工具结构化输入")
+    todo_id: str | None = Field(default=None, description="当前工具调用所属的 todo id")
+
+
+class ToolResult(BaseModel):
+    tool_name: str = Field(..., description="工具名称")
+    tool_input: dict[str, Any] = Field(..., description="工具结构化输入")
+    tool_output: str = Field(..., description="工具输出")
+    success: bool = Field(..., description="工具是否执行成功")
+    todo_id: str | None = Field(default=None, description="该结果属于哪个 todo")
+
 
 class FinalAnswer(BaseModel):
-    """总结Agent:负责总结和归纳整个过程的结果，形成最终的答案或结论。"""
-    answer: str = Field(..., description="最终的答案或结论")
+    answer: str = Field(..., description="最终输出给用户的答案")

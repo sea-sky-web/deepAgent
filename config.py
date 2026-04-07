@@ -11,6 +11,7 @@ class Settings:
     api_key: str 
     api_url: str 
     model_name: str 
+    tavily_api_key: str
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -18,10 +19,13 @@ class Settings:
         api_key = os.getenv("OPENAI_API_KEY", "").strip()
         api_url = os.getenv("OPENAI_API_URL", "").strip()
         model_name = os.getenv("OPENAI_MODEL_NAME", "").strip()
+        tavily_api_key = os.getenv("TAVILY_API_KEY", "").strip()
         if not api_key:
             raise ValueError("OPENAI_API_KEY is not set in environment variables.")
         if not api_url:
             raise ValueError("OPENAI_API_URL is not set in environment variables.")
         if not model_name:
             raise ValueError("OPENAI_MODEL_NAME is not set in environment variables.")
-        return cls(api_key=api_key, api_url=api_url, model_name=model_name)
+        if not tavily_api_key:
+            raise ValueError("TAVILY_API_KEY is not set in environment variables.")
+        return cls(api_key=api_key, api_url=api_url, model_name=model_name, tavily_api_key=tavily_api_key)
