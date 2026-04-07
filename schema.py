@@ -56,3 +56,16 @@ class IntentDecision(BaseModel):
         description="当前用户输入的意图类型"
     )
     reason: str = Field(..., description="为什么这样判断")
+
+
+class ReplanDecision(BaseModel):
+    should_replan: bool = Field(
+        ...,
+        description="是否需要重新规划"
+    )
+    reason: str = Field(..., description="为什么需要/不需要重新规划")
+    new_or_modified_todos: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="如果需要 replan，提供新增或修改的 todo 内容"
+    )
+    replan_count: int = Field(default=0, description="当前已 replan 的次数")

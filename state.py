@@ -51,6 +51,9 @@ class AgentState(BaseModel):
 
     max_steps: int = Field(default=10)
     current_step_count: int = Field(default=0)
+    
+    # 动态规划相关
+    replan_count: int = Field(default=0)  # 本轮已 replan 的次数
 
     def reset_turn_fields(self) -> None:
         self.current_action = None
@@ -64,6 +67,7 @@ class AgentState(BaseModel):
         self.step_history = []
         self.tool_result_counter = 0
         self.tool_result_file_map = {}
+        self.replan_count = 0  # 重置 replan 计数
 
     def append_user_message(self, content: str) -> None:
         self.user_input = content

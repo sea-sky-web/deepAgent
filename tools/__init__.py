@@ -10,6 +10,7 @@ from tools.filesystem import (
 )
 from tools.task import TaskTool
 from tools.skill_loader import LoadSkillTool
+from tools.replan import ReplanTool
 
 __all__ = [
     "BaseTool",
@@ -22,4 +23,5 @@ __all__ = [
     "AppendFileTool",
     "TaskTool",
     "LoadSkillTool",
+    "ReplanTool",
 ]

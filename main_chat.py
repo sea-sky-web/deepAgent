@@ -30,6 +30,7 @@ from tools import (
     TaskTool,
     LoadSkillTool,
 )
+from tools.replan import ReplanTool
 
 
 def print_stage(title: str, state: AgentState) -> None:
@@ -69,6 +70,7 @@ def build_tooling(settings: Settings, llm: LLMClient, workspace_root: str, skill
 
     tool_registry.register(TaskTool(subagent_manager))
     tool_registry.register(LoadSkillTool(skill_registry))
+    tool_registry.register(ReplanTool(llm))
     return tool_registry
 
 

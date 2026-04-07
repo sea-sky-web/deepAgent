@@ -160,6 +160,22 @@ def executor_node(state: AgentState, llm: LLMClient, tool_registry: ToolRegistry
             _set_todo_status(state, current_todo.id, "completed")
             state.step_history.append(f"executor: completed todo={current_todo.id} after workspace write")
             state.current_todo_id = None
+            
+            # 【新增】动态规划检查：完成 todo 后，评估是否需要重新规划
+            # 只在 search/task 的写入完成后才进行 replan 检查
+            # （避免对每个 write_file 都 replan）
+            if state.replan_count < 2:  # 防止无限循环
+                # 查找对应的原始工具结果，用于 replan 决策
+                search_notes = [n for n in state.research_notes if n.startswith(f"[{current_todo.id}]")]
+                if search_notes:
+                    result_summary = search_notes[-1][:500]  # 取最后一条笔记的前500字
+                    
+                    # 此处应该返回 replan 决策，但我们选择先完成 write_file
+                    # 然后在下一个 executor 循环中统一处理
+                    state.step_history.append(
+                        f"executor: completed todo={current_todo.id}, will check if replan is needed"
+                    )
+            
             state.tool_result = None
             current_todo = None
 
@@ -196,16 +212,22 @@ def executor_node(state: AgentState, llm: LLMClient, tool_registry: ToolRegistry
 
     system_prompt = """
 你是一个严格的执行决策器。
-当前系统采用 todo 驱动，并支持 skills 的按需加载。
+当前系统采用 todo 驱动，并支持 skills 的按需加载和动态规划。
 
 规则：
 1. 如果当前 todo 需要特定领域知识或专门操作规范，而系统中存在匹配 skill，且尚未加载，优先调用 load_skill
 2. 如果当前 todo 是简单信息查找，可直接用 tavily_search
 3. 如果当前 todo 是复杂调研、比较、归纳、分析，可优先使用 task
-4. action 只能是 "call_tool" / "finalize" / "fail"
-5. 如果 action=call_tool，tool_name 必须从提供的工具列表中选择
-6. tool_input 必须符合 input_schema
-7. 当生成 task 工具的输入时，如果需要读取之前的调研结果，使用下方列出的 workspace notes 文件路径
+4. 【新增】如果完成 search/task 后发现需要调整规划，可调用 replan 工具动态更新 todo 列表
+5. action 只能是 "call_tool" / "finalize" / "fail"
+6. 如果 action=call_tool，tool_name 必须从提供的工具列表中选择
+7. tool_input 必须符合 input_schema
+8. 当生成 task 工具的输入时，如果需要读取之前的调研结果，使用下方列出的 workspace notes 文件路径
+
+【动态规划（Replan）说明】
+- 触发条件：完成一个 search/task 工具后，如果发现需要新增、删除或修改 todo，可调用 replan
+- 限制条件：每轮最多 replan 2 次，防止无限循环
+- 回滚机制：如果 replan 后发现新的 todo 仍不能满足需求，可尝试再 replan 一次（共2次上限）
 """.strip()
 
     user_prompt = f"""
@@ -227,6 +249,8 @@ workspace 文件：
 最近一次工具结果：
 {state.tool_result.model_dump_json(indent=2, ensure_ascii=False) if state.tool_result else "null"}
 
+当前 replan 次数：{state.replan_count}
+
 可用工具：
 {tools_desc}
 
@@ -236,7 +260,7 @@ workspace 文件：
 已加载 skills：
 {json.dumps(list(state.loaded_skills.keys()), ensure_ascii=False, indent=2)}
 
-请输出下一步动作。
+请输出下一步动作。如果需要动态调整规划，请调用 replan 工具。
 """.strip()
 
     decision = llm.chat_structured(
@@ -290,6 +314,31 @@ def tool_node(state: AgentState, tool_registry: ToolRegistry) -> AgentState:
             todo_id=todo_id,
         )
         state.step_history.append(f"tool_node: executed {tool_name} for todo={todo_id}")
+        
+        # 【新增】处理 replan 工具的结果：解析并更新 todo_list
+        if tool_name == "replan":
+            try:
+                import json as json_module
+                replan_result = json_module.loads(output)
+                if replan_result.get("should_replan"):
+                    # 新增 todo
+                    for new_todo_spec in replan_result.get("new_or_modified_todos", []):
+                        new_todo = TodoItem(
+                            id=new_todo_spec.get("id", f"todo_{len(state.todo_list)+1}"),
+                            content=new_todo_spec.get("content", ""),
+                            status=new_todo_spec.get("status", "pending")
+                        )
+                        state.todo_list.append(new_todo)
+                    
+                    # 更新 replan 计数
+                    state.replan_count = replan_result.get("replan_count", state.replan_count + 1)
+                    state.step_history.append(
+                        f"tool_node: replan applied, replan_count={state.replan_count}, "
+                        f"added {len(replan_result.get('new_or_modified_todos', []))} new todos"
+                    )
+            except Exception as e:
+                state.step_history.append(f"tool_node: failed to parse replan result: {str(e)}")
+        
     except Exception as exc:
         result = ToolResult(
             tool_name=tool_name,
@@ -311,34 +360,41 @@ def finalizer_node(state: AgentState, llm: LLMClient) -> AgentState:
 你是最终回答生成器。
 请基于用户输入、todo 执行结果、research_notes、workspace 文件和已加载 skills，
 输出结构化 JSON。
+
+重要要求（务必遵守）：
+1. answer：生成简洁、结构化的最终答案
+2. sources：列出所有引用的文件或信息来源
+3. next_actions：基于当前任务，给出 2-3 个后续建议
+4. memory_write：
+   - profile_updates：【必填】提取用户在本次交互中的新特征
+     * 用户关注的领域（如 "RAG", "LLM 应用"）
+     * 用户的专业背景（如 "AI 工程师", "产品经理"）
+     * 用户的偏好风格（如 "喜欢理论 + 实践结合"）
+     * 用户的关键问题（如 "追求 RAG 工程落地"）
+   - episode_summary：本次任务的完成情况总结（1-2 句话）
+   - tags：5-8 个标签，便于后续检索
 """.strip()
 
     user_prompt = f"""
 用户输入：
 {state.user_input}
 
-todo 列表：
+当前任务完成情况：
 {json.dumps([todo.model_dump() for todo in state.todo_list], ensure_ascii=False, indent=2)}
 
-research_notes：
-{json.dumps(state.research_notes, ensure_ascii=False, indent=2)}
+本次调研的关键笔记：
+{json.dumps(state.research_notes[-5:] if len(state.research_notes) > 5 else state.research_notes, ensure_ascii=False, indent=2)}
 
-workspace 文件：
-{json.dumps(state.workspace_files, ensure_ascii=False, indent=2)}
+已生成的文件：
+{json.dumps(state.workspace_files[-5:] if len(state.workspace_files) > 5 else state.workspace_files, ensure_ascii=False, indent=2)}
 
-已加载 skills：
-{json.dumps(list(state.loaded_skills.keys()), ensure_ascii=False, indent=2)}
-
-skill 内容：
-{json.dumps(state.loaded_skills, ensure_ascii=False, indent=2)}
-
-已有 profile memory：
+已有用户侧面信息（用于更新）：
 {json.dumps(state.memory_profile, ensure_ascii=False, indent=2)}
 
-近期 episodes：
-{json.dumps(state.recent_episodes, ensure_ascii=False, indent=2)}
+最近的交互历史（帮助理解用户背景）：
+{json.dumps(state.recent_episodes[-3:] if len(state.recent_episodes) > 3 else state.recent_episodes, ensure_ascii=False, indent=2)}
 
-请输出最终结构化结果。
+请输出最终结构化结果。特别注意要填充 profile_updates，不要留空。
 """.strip()
 
     result = llm.chat_structured(
