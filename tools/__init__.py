@@ -9,6 +9,7 @@ from tools.filesystem import (
     AppendFileTool,
 )
 from tools.task import TaskTool
+from tools.skill_loader import LoadSkillTool
 
 __all__ = [
     "BaseTool",
@@ -20,4 +21,5 @@ __all__ = [
     "WriteFileTool",
     "AppendFileTool",
     "TaskTool",
+    "LoadSkillTool",
 ]

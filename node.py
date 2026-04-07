@@ -102,6 +102,15 @@ def executor_node(state: AgentState, llm: LLMClient, tool_registry: ToolRegistry
 
     tr = state.tool_result
     if tr is not None and tr.todo_id == current_todo.id and tr.success:
+        if tr.tool_name == "load_skill":
+            skill_name = tr.tool_input["skill_name"]
+            state.loaded_skills[skill_name] = tr.tool_output
+            state.tool_result = None
+            state.tool_request = None
+            state.status = "executing"
+            state.step_history.append(f"executor: loaded skill={skill_name}")
+            # Continue to redecide action instead of returning immediately
+        
         if tr.tool_name in {"tavily_search", "task"}:
             compact = _compact_text(tr.tool_output)
             state.research_notes.append(f"[{current_todo.id}] {current_todo.content}\n{compact}")
@@ -167,16 +176,15 @@ def executor_node(state: AgentState, llm: LLMClient, tool_registry: ToolRegistry
 
     system_prompt = """
 你是一个严格的执行决策器。
-当前系统采用 todo 驱动。
-你的任务是围绕当前 in_progress 的 todo 决定下一步动作。
+当前系统采用 todo 驱动，并支持 skills 的按需加载。
 
 规则：
-1. 如果当前 todo 是简单信息查找，可以直接用 tavily_search
-2. 如果当前 todo 是复杂调研、比较、归纳、分析，优先使用 task 委派给合适的 subagent
-3. action 只能是 "call_tool" / "finalize" / "fail"
-4. 如果 action=call_tool，tool_name 必须从提供的工具列表中选择
-5. tool_input 必须符合 input_schema
-6. 对 task 工具，你必须提供 subagent_type 和 task_input
+1. 如果当前 todo 需要特定领域知识或专门操作规范，而系统中存在匹配 skill，且尚未加载，优先调用 load_skill
+2. 如果当前 todo 是简单信息查找，可直接用 tavily_search
+3. 如果当前 todo 是复杂调研、比较、归纳、分析，可优先使用 task
+4. action 只能是 "call_tool" / "finalize" / "fail"
+5. 如果 action=call_tool，tool_name 必须从提供的工具列表中选择
+6. tool_input 必须符合 input_schema
 """.strip()
 
     user_prompt = f"""
@@ -197,6 +205,12 @@ workspace 文件：
 
 可用工具：
 {tools_desc}
+
+可用 skills（仅元数据）：
+{json.dumps(state.available_skills, ensure_ascii=False, indent=2)}
+
+已加载 skills：
+{json.dumps(list(state.loaded_skills.keys()), ensure_ascii=False, indent=2)}
 
 请输出下一步动作。
 """.strip()
@@ -287,6 +301,12 @@ research_notes：
 
 workspace 文件：
 {json.dumps(state.workspace_files, ensure_ascii=False, indent=2)}
+
+已加载 skills：
+{json.dumps(list(state.loaded_skills.keys()), ensure_ascii=False, indent=2)}
+
+skill 内容：
+{json.dumps(state.loaded_skills, ensure_ascii=False, indent=2)}
 
 请输出最终回答。
 """.strip()

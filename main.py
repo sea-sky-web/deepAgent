@@ -7,6 +7,7 @@ from llm import LLMClient
 from node import executor_node, finalizer_node, planner_node, tool_node
 from state import AgentState
 from subagents import SubAgentManager, SubAgentSpec
+from skill_runtime import SkillRegistry
 from tools import (
     ToolRegistry,
     TavilySearchTool,
@@ -16,6 +17,7 @@ from tools import (
     WriteFileTool,
     AppendFileTool,
     TaskTool,
+    LoadSkillTool,
 )
 
 
@@ -36,6 +38,11 @@ def main() -> None:
     tool_registry.register(ReadFileTool(backend))
     tool_registry.register(WriteFileTool(backend))
     tool_registry.register(AppendFileTool(backend))
+
+    skill_registry = SkillRegistry(skills_root="skills")
+    skill_registry.scan()
+
+    tool_registry.register(LoadSkillTool(skill_registry))
 
     subagent_manager = SubAgentManager(llm=llm, tool_registry=tool_registry)
     subagent_manager.register(
@@ -66,6 +73,7 @@ def main() -> None:
         ],
         max_steps=10,
         workspace_root="workspace",
+        available_skills=skill_registry.list_metadata(),
     )
 
     print_stage("INITIAL STATE", state)
